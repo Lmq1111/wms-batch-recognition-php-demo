@@ -24,6 +24,8 @@ RECOGNITION_LOG_PATH=/path/to/recognition-events.jsonl
 | `recognition_error` | 识别失败事件 | 图片已解析，但模型调用、返回或解析过程失败时写入 |
 | `feedback` | 人工反馈事件 | 调用 `/api/wms/batch-feedback` 写入人工确认结果时写入 |
 
+如果 AI 模型调用超过 `AI_TIMEOUT_MS`，服务会中止请求并记录为 `status=not_found` 的 `recognition` 事件，`ai_reason` 中会包含超时说明。
+
 ## 常用字段
 
 | 字段 | 含义 |
@@ -38,6 +40,7 @@ RECOGNITION_LOG_PATH=/path/to/recognition-events.jsonl
 | `ai_reason` | 模型判断原因或后端兜底说明 |
 | `elapsed_ms` | PHP 服务调用百炼模型的耗时 |
 | `total_elapsed_ms` | 接口从进入识别处理到生成响应前的总耗时 |
+| `ai_timeout_ms` | 模型调用超时阈值；超过后按 `status=not_found` 记录 |
 | `image_info` | 收到的图片大小、MIME、宽高，以及调用方上报的压缩参数 |
 
 ## `image_info`

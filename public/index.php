@@ -15,6 +15,7 @@ $apiEndpoint = env_value(
 );
 $maxJsonBytes = env_int('MAX_JSON_BYTES', 18 * 1024 * 1024);
 $maxTokens = env_int('AI_MAX_TOKENS', 900);
+$aiTimeoutMs = env_positive_int('AI_TIMEOUT_MS', 3000);
 $wmsApiToken = env_value('WMS_API_TOKEN', '');
 $corsAllowOrigin = env_value('CORS_ALLOW_ORIGIN', '*');
 $recognitionLogPath = resolve_path($rootDir, env_value('RECOGNITION_LOG_PATH', 'logs/recognition-events.jsonl'));
@@ -108,6 +109,12 @@ function env_int($name, $default)
         return $default;
     }
     return intval($value);
+}
+
+function env_positive_int($name, $default)
+{
+    $value = env_int($name, $default);
+    return $value > 0 ? $value : $default;
 }
 
 function resolve_path($rootDir, $path)
@@ -775,12 +782,26 @@ function normalize_recognition($parsed, $elapsedMs, $imageInfo)
         'raw_visible_text' => is_string(array_value($fallbackParsed, 'raw_visible_text')) ? array_value($fallbackParsed, 'raw_visible_text') : '',
         'needs_human_confirmation' => true,
         'elapsed_ms' => $elapsedMs,
+        'ai_timeout_ms' => $GLOBALS['aiTimeoutMs'],
         'image_info' => $imageInfo,
         'provider' => $provider,
         'provider_label' => $providerLabel,
         'thinking' => 'disabled',
         'model' => $model,
     );
+}
+
+function build_timeout_recognition($elapsedMs, $imageInfo)
+{
+    return normalize_recognition(array(
+        'batch_number' => '',
+        'status' => 'not_found',
+        'confidence' => 'unknown',
+        'trigger' => '',
+        'candidates' => array(),
+        'reason' => 'AI 识别超过 ' . $GLOBALS['aiTimeoutMs'] . 'ms 未返回，按超时未识别处理，需人工填写或确认为空。',
+        'raw_visible_text' => '',
+    ), $elapsedMs, $imageInfo);
 }
 
 function build_prompt()
@@ -808,7 +829,7 @@ function build_prompt()
 
 function recognize_batch($imageDataUrl, $imageInfo)
 {
-    global $apiKey, $apiEndpoint, $model, $maxTokens, $providerLabel;
+    global $apiKey, $apiEndpoint, $model, $maxTokens, $providerLabel, $aiTimeoutMs;
 
     if ($apiKey === '') {
         throw new HttpError('缺少 DASHSCOPE_API_KEY 或 AI_API_KEY。请在启动服务时设置环境变量。', 401);
@@ -840,8 +861,8 @@ function recognize_batch($imageDataUrl, $imageInfo)
     $ch = curl_init($apiEndpoint);
     curl_setopt($ch, CURLOPT_POST, true);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 60);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT_MS, min(10000, $aiTimeoutMs));
+    curl_setopt($ch, CURLOPT_TIMEOUT_MS, $aiTimeoutMs);
     curl_setopt($ch, CURLOPT_HTTPHEADER, array(
         'Authorization: Bearer ' . $apiKey,
         'Content-Type: application/json',
@@ -851,10 +872,14 @@ function recognize_batch($imageDataUrl, $imageInfo)
     $rawResponse = curl_exec($ch);
     $elapsedMs = now_ms() - $started;
     $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlErrno = curl_errno($ch);
     $curlError = curl_error($ch);
     curl_close($ch);
 
     if ($rawResponse === false) {
+        if ($curlErrno === 28) {
+            return build_timeout_recognition($elapsedMs, $imageInfo);
+        }
         throw new HttpError($providerLabel . ' API 请求失败：' . $curlError, 502, $elapsedMs);
     }
 
@@ -893,6 +918,7 @@ function build_recognition_response($result, $requestId, $totalElapsedMs)
         'meta' => array(
             'elapsed_ms' => $result['elapsed_ms'],
             'total_elapsed_ms' => $totalElapsedMs,
+            'ai_timeout_ms' => $result['ai_timeout_ms'],
             'provider' => $result['provider'],
             'provider_label' => $result['provider_label'],
             'model' => $result['model'],
@@ -929,6 +955,7 @@ function build_recognition_log_event($requestId, $body, $result, $response)
         'ai_reason' => $result['reason'],
         'elapsed_ms' => $result['elapsed_ms'],
         'total_elapsed_ms' => $response['meta']['total_elapsed_ms'],
+        'ai_timeout_ms' => $result['ai_timeout_ms'],
         'image_info' => $result['image_info'],
         'provider' => $result['provider'],
         'provider_label' => $result['provider_label'],
@@ -952,6 +979,7 @@ function build_recognition_error_log_event($requestId, $body, $imageInfo, $error
         'status_code' => $error instanceof HttpError ? $error->statusCode : 500,
         'elapsed_ms' => $error instanceof HttpError ? $error->elapsedMs : null,
         'total_elapsed_ms' => $totalElapsedMs,
+        'ai_timeout_ms' => $GLOBALS['aiTimeoutMs'],
         'image_info' => $imageInfo,
         'provider' => $provider,
         'provider_label' => $providerLabel,
@@ -997,7 +1025,7 @@ function generate_request_id()
 
 function handle_health()
 {
-    global $apiKey, $provider, $providerLabel, $model;
+    global $apiKey, $provider, $providerLabel, $model, $aiTimeoutMs;
     send_json(200, array(
         'ok' => true,
         'hasApiKey' => $apiKey !== '',
@@ -1005,6 +1033,7 @@ function handle_health()
         'providerLabel' => $providerLabel,
         'model' => $model,
         'thinking' => 'disabled',
+        'aiTimeoutMs' => $aiTimeoutMs,
         'logEnabled' => true,
         'runtime' => 'php',
         'phpVersion' => PHP_VERSION,

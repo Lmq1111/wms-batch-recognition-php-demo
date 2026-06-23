@@ -65,6 +65,7 @@ WMS_API_TOKEN=给WMS或小程序后端的共享Token
 AI_MODEL=qwen3.6-flash
 AI_API_ENDPOINT=https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
 AI_MAX_TOKENS=900
+AI_TIMEOUT_MS=3000
 CORS_ALLOW_ORIGIN=*
 MAX_JSON_BYTES=18874368
 RECOGNITION_LOG_PATH=logs/recognition-events.jsonl
@@ -155,6 +156,7 @@ GET /api/health
   "providerLabel": "DashScope",
   "model": "qwen3.6-flash",
   "thinking": "disabled",
+  "aiTimeoutMs": 3000,
   "logEnabled": true,
   "runtime": "php",
   "phpVersion": "7.4.33"
@@ -230,6 +232,7 @@ X-API-Key: <WMS_API_TOKEN>
   "meta": {
     "elapsed_ms": 1521,
     "total_elapsed_ms": 1540,
+    "ai_timeout_ms": 3000,
     "provider": "dashscope",
     "provider_label": "DashScope",
     "model": "qwen3.6-flash",
@@ -273,6 +276,7 @@ X-API-Key: <WMS_API_TOKEN>
   "meta": {
     "elapsed_ms": 1400,
     "total_elapsed_ms": 1418,
+    "ai_timeout_ms": 3000,
     "provider": "dashscope",
     "provider_label": "DashScope",
     "model": "qwen3.6-flash",
@@ -303,6 +307,7 @@ X-API-Key: <WMS_API_TOKEN>
   "meta": {
     "elapsed_ms": 1600,
     "total_elapsed_ms": 1622,
+    "ai_timeout_ms": 3000,
     "provider": "dashscope",
     "provider_label": "DashScope",
     "model": "qwen3.6-flash",
@@ -329,6 +334,8 @@ X-API-Key: <WMS_API_TOKEN>
 | `multiple_candidates` | 存在多个候选 | 展示候选列表或让人工输入确认 |
 | `not_found` | 未识别到明确批次号 | 允许人工填写或重新拍照，不能自动猜测 |
 | `error` | 识别流程异常 | 提示失败，可重新拍照或人工填写 |
+
+如果 AI 模型调用超过 `AI_TIMEOUT_MS`，接口会中止模型请求，并按 `status=not_found` 返回空批号，不作为接口错误处理。
 
 ### 人工确认反馈
 
@@ -387,6 +394,7 @@ logs/recognition-events.jsonl
 
 - `elapsed_ms`：PHP 服务调用百炼模型的耗时，包含接口服务到模型服务的网络传输和模型返回时间。
 - `total_elapsed_ms`：本接口从进入识别处理到生成响应前的总耗时，可与 `elapsed_ms` 对比估算服务端本地解析、图片信息读取、规则处理和日志前准备的开销。
+- `ai_timeout_ms`：模型调用超时阈值。默认 3000ms；超过后接口中止 AI 请求，按 `status=not_found` 返回空批号，继续进入人工确认/填写。
 
 ## curl 测试
 
