@@ -19,6 +19,7 @@ $aiTimeoutMs = env_positive_int('AI_TIMEOUT_MS', 3000);
 $wmsApiToken = env_value('WMS_API_TOKEN', '');
 $corsAllowOrigin = env_value('CORS_ALLOW_ORIGIN', '*');
 $recognitionLogPath = resolve_path($rootDir, env_value('RECOGNITION_LOG_PATH', 'logs/recognition-events.jsonl'));
+$logRetentionDays = env_non_negative_int('LOG_RETENTION_DAYS', 180);
 
 $triggerWords = array(
     'LOT',
@@ -115,6 +116,12 @@ function env_positive_int($name, $default)
 {
     $value = env_int($name, $default);
     return $value > 0 ? $value : $default;
+}
+
+function env_non_negative_int($name, $default)
+{
+    $value = env_int($name, $default);
+    return $value >= 0 ? $value : $default;
 }
 
 function resolve_path($rootDir, $path)
@@ -928,14 +935,64 @@ function build_recognition_response($result, $requestId, $totalElapsedMs)
     );
 }
 
+function log_line_is_expired($line, $cutoffTimestamp)
+{
+    $decoded = json_decode($line, true);
+    if (!is_array($decoded) || !isset($decoded['created_at'])) {
+        return false;
+    }
+    $createdAt = strtotime((string) $decoded['created_at']);
+    if ($createdAt === false) {
+        return false;
+    }
+    return $createdAt < $cutoffTimestamp;
+}
+
 function append_jsonl($event)
 {
-    global $recognitionLogPath;
+    global $recognitionLogPath, $logRetentionDays;
     $dir = dirname($recognitionLogPath);
     if (!is_dir($dir)) {
         mkdir($dir, 0775, true);
     }
-    file_put_contents($recognitionLogPath, json_encode($event, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n", FILE_APPEND | LOCK_EX);
+
+    $line = json_encode($event, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n";
+    $handle = fopen($recognitionLogPath, 'c+');
+    if ($handle === false) {
+        throw new Exception('无法打开日志文件。');
+    }
+
+    if (!flock($handle, LOCK_EX)) {
+        fclose($handle);
+        throw new Exception('无法锁定日志文件。');
+    }
+
+    if ($logRetentionDays > 0) {
+        $cutoffTimestamp = time() - $logRetentionDays * 24 * 60 * 60;
+        $retainedLines = array();
+        rewind($handle);
+        while (($existingLine = fgets($handle)) !== false) {
+            $trimmedLine = trim($existingLine);
+            if ($trimmedLine === '') {
+                continue;
+            }
+            if (!log_line_is_expired($trimmedLine, $cutoffTimestamp)) {
+                $retainedLines[] = rtrim($existingLine, "\r\n");
+            }
+        }
+        rewind($handle);
+        ftruncate($handle, 0);
+        foreach ($retainedLines as $retainedLine) {
+            fwrite($handle, $retainedLine . "\n");
+        }
+    } else {
+        fseek($handle, 0, SEEK_END);
+    }
+
+    fwrite($handle, $line);
+    fflush($handle);
+    flock($handle, LOCK_UN);
+    fclose($handle);
 }
 
 function build_recognition_log_event($requestId, $body, $result, $response)
@@ -1025,7 +1082,7 @@ function generate_request_id()
 
 function handle_health()
 {
-    global $apiKey, $provider, $providerLabel, $model, $aiTimeoutMs;
+    global $apiKey, $provider, $providerLabel, $model, $aiTimeoutMs, $logRetentionDays;
     send_json(200, array(
         'ok' => true,
         'hasApiKey' => $apiKey !== '',
@@ -1034,6 +1091,7 @@ function handle_health()
         'model' => $model,
         'thinking' => 'disabled',
         'aiTimeoutMs' => $aiTimeoutMs,
+        'logRetentionDays' => $logRetentionDays,
         'logEnabled' => true,
         'runtime' => 'php',
         'phpVersion' => PHP_VERSION,

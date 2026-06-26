@@ -16,6 +16,14 @@ RECOGNITION_LOG_PATH=/path/to/recognition-events.jsonl
 
 日志目录和文件会在首次写入时自动创建。服务进程需要对目标目录有写权限。
 
+默认日志保留最近 180 天事件。可通过环境变量调整：
+
+```text
+LOG_RETENTION_DAYS=180
+```
+
+服务每次写入日志前，会根据每行事件的 `created_at` 清理超过保留天数的旧行；无法解析 `created_at` 的异常行会保留，避免误删。设为 `0` 可关闭自动清理。
+
 ## 事件类型
 
 | `event_type` | 含义 | 何时写入 |

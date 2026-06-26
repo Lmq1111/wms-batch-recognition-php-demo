@@ -69,6 +69,7 @@ AI_TIMEOUT_MS=3000
 CORS_ALLOW_ORIGIN=*
 MAX_JSON_BYTES=18874368
 RECOGNITION_LOG_PATH=logs/recognition-events.jsonl
+LOG_RETENTION_DAYS=180
 ```
 
 不要把真实 API Key 提交到 Git。
@@ -157,6 +158,7 @@ GET /api/health
   "model": "qwen3.6-flash",
   "thinking": "disabled",
   "aiTimeoutMs": 3000,
+  "logRetentionDays": 180,
   "logEnabled": true,
   "runtime": "php",
   "phpVersion": "7.4.33"
@@ -388,7 +390,7 @@ Authorization: Bearer <WMS_API_TOKEN>
 logs/recognition-events.jsonl
 ```
 
-日志文件会在首次写入时自动创建。字段说明见 [docs/log-fields.md](docs/log-fields.md)。
+日志文件会在首次写入时自动创建。默认只保留最近 180 天事件；服务每次写入日志前会根据 `created_at` 清理超过 `LOG_RETENTION_DAYS` 的旧行。字段说明见 [docs/log-fields.md](docs/log-fields.md)。
 
 耗时字段口径：
 
