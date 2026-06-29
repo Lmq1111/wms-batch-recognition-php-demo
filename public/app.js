@@ -30,8 +30,6 @@ const els = {
   fileInput: document.querySelector("#fileInput"),
   uploadGrid: document.querySelector("#uploadGrid"),
   photoCount: document.querySelector("#photoCount"),
-  sampleCount: document.querySelector("#sampleCount"),
-  sampleSelect: document.querySelector("#sampleSelect"),
   submitButton: document.querySelector("#submitButton"),
   dialog: document.querySelector("#confirmDialog"),
   previewImage: document.querySelector("#previewImage"),
@@ -74,12 +72,6 @@ function fileToDataUrl(file) {
     reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(file);
   });
-}
-
-async function urlToDataUrl(url) {
-  const response = await fetch(url);
-  const blob = await response.blob();
-  return fileToDataUrl(blob);
 }
 
 function estimateDataUrlBytes(dataUrl) {
@@ -392,20 +384,6 @@ async function loadRuntime() {
     : `缺少 API Key`;
 }
 
-async function loadSamples() {
-  const response = await fetch("/api/samples");
-  const data = await response.json();
-  const samples = Array.isArray(data.samples) ? data.samples : [];
-  els.sampleCount.textContent = `${samples.length} 张`;
-
-  samples.forEach((sample) => {
-    const option = document.createElement("option");
-    option.value = sample.url;
-    option.textContent = `${sample.id} · ${sample.fileName}`;
-    els.sampleSelect.append(option);
-  });
-}
-
 els.recognizeButton.addEventListener("click", () => els.fileInput.click());
 els.addPhotoButton.addEventListener("click", () => els.fileInput.click());
 
@@ -420,13 +398,6 @@ els.fileInput.addEventListener("change", async () => {
   const dataUrl = await fileToDataUrl(file);
   els.fileInput.value = "";
   startRecognitionTask(dataUrl);
-});
-
-els.sampleSelect.addEventListener("change", async () => {
-  if (!els.sampleSelect.value) return;
-  const dataUrl = await urlToDataUrl(els.sampleSelect.value);
-  startRecognitionTask(dataUrl);
-  els.sampleSelect.value = "";
 });
 
 els.confirmBatchInput.addEventListener("input", () => {
@@ -507,4 +478,4 @@ els.submitButton.addEventListener("click", () => {
   showToast(dateText ? `已模拟提交：厂商批号 ${batch}，${dateText}` : `已模拟提交：厂商批号 ${batch}`);
 });
 
-await Promise.all([loadRuntime(), loadSamples()]);
+await loadRuntime();
