@@ -1,8 +1,10 @@
-# WMS Batch Recognition API PHP
+# WMS Batch Recognition PHP Demo
 
-PHP 版 WMS 入库标签识别验证服务。它接收图片，调用阿里云百炼 DashScope 视觉模型识别 WMS “厂商批号、生产日期、失效日期”三个可人工确认字段，并返回候选结果、审计字段和耗时字段。
+PHP 版 WMS 入库标签识别一体化验证仓库。它包含浏览器 Demo 页面和 PHP 接口，便于在本地验证拍照/上传、AI 识别、人工确认和日志留痕流程。
 
-本分支包含浏览器 Demo 页面，便于在 PHP 环境中验证拍照/上传、AI 识别和人工确认流程。本服务不接 WMS 生产入库，不自动提交结果。所有识别结果都必须由业务人员人工确认。
+本仓库不接 WMS 生产入库，不自动提交结果。所有识别结果都必须由业务人员人工确认。
+
+纯接口服务已拆分到私密仓库 `Lmq1111/wms-batch-recognition-api-php`，本地目录为 `work/wms-batch-recognition-api-php/`。服务器联调或交给 WMS/IT 时，优先使用纯接口仓库。
 
 ## 产品边界
 
@@ -46,11 +48,11 @@ php -m | egrep 'curl|json'
 ### 2. 拉取代码
 
 ```bash
-sudo mkdir -p /opt/wms-batch-recognition-api-php
-sudo chown -R $USER:$USER /opt/wms-batch-recognition-api-php
+sudo mkdir -p /opt/wms-batch-recognition-php-demo
+sudo chown -R $USER:$USER /opt/wms-batch-recognition-php-demo
 
-git clone git@github.com:Lmq1111/wms-batch-recognition-api-php.git /opt/wms-batch-recognition-api-php
-cd /opt/wms-batch-recognition-api-php
+git clone git@github.com:Lmq1111/wms-batch-recognition-php-demo.git /opt/wms-batch-recognition-php-demo
+cd /opt/wms-batch-recognition-php-demo
 ```
 
 ### 3. 配置环境变量
@@ -100,14 +102,14 @@ sudo systemctl start php-fpm
 sudo systemctl status php-fpm
 ```
 
-新增 Nginx 配置，例如 `/etc/nginx/conf.d/wms-batch-recognition-api-php.conf`：
+新增 Nginx 配置，例如 `/etc/nginx/conf.d/wms-batch-recognition-php-demo.conf`：
 
 ```nginx
 server {
     listen 80;
     server_name your-domain.example.com;
 
-    root /opt/wms-batch-recognition-api-php/public;
+    root /opt/wms-batch-recognition-php-demo/public;
     index index.php;
 
     client_max_body_size 20m;
@@ -139,7 +141,7 @@ sudo systemctl reload nginx
 如果只是临时验证，也可以使用 PHP 内置服务：
 
 ```bash
-cd /opt/wms-batch-recognition-api-php
+cd /opt/wms-batch-recognition-php-demo
 php -S 0.0.0.0:5178 -t public
 ```
 
