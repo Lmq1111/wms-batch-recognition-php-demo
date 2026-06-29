@@ -43,7 +43,7 @@ $triggerWords = array(
     '出厂编号',
 );
 
-$valueAfterTriggerPattern = '[：:\s]*([A-Za-z0-9][A-Za-z0-9._\/-]{0,40})';
+$valueAfterTriggerPattern = '[：:\s]*(?:(?:Serial\s*(?:No\.?|Number)?|S\s*/\s*N|No\.?|Number|Barcode|Bar\s*Code|编号|号码|条形码)[：:\s-]+)?([A-Za-z0-9][A-Za-z0-9._\/-]{0,40})';
 $triggerFallbackPatterns = array(
     array('trigger' => 'Lot Number', 'regex' => '~\bLot\s+Number\b' . $valueAfterTriggerPattern . '~iu'),
     array('trigger' => 'Lot No', 'regex' => '~\bLot\s+No\b\.?' . $valueAfterTriggerPattern . '~iu'),
@@ -711,6 +711,104 @@ function clean_fallback_value($value)
     return preg_replace('/[，,。；;）)\]}】]+$/u', '', trim($value));
 }
 
+function batch_candidate_is_label($value)
+{
+    if (!is_string($value)) {
+        return true;
+    }
+    $normalized = strtolower(preg_replace('/[\s：:._\/-]+/u', '', trim($value)));
+    if ($normalized === '') {
+        return true;
+    }
+
+    $labels = array(
+        'serial',
+        'serialno',
+        'serialnumber',
+        'sn',
+        'no',
+        'number',
+        'lot',
+        'lotno',
+        'lotnumber',
+        'batch',
+        'retracecode',
+        'barcode',
+        'bar',
+        'code',
+        '序列号',
+        '产品序列号',
+        '序号',
+        '出厂编号',
+        '批号',
+        '生产批号',
+        '批次号',
+        '批次代码',
+        '编号',
+        '号码',
+        '条形码',
+    );
+
+    return in_array($normalized, $labels, true);
+}
+
+function normalize_batch_candidate_value($value)
+{
+    if (!is_string($value)) {
+        return '';
+    }
+
+    $value = clean_fallback_value($value);
+    for ($i = 0; $i < 3; $i += 1) {
+        $before = $value;
+        $value = preg_replace('/^(?:序列号|产品序列号|序号|出厂编号|批号|生产批号|批次号|批次代码|编号|号码|条形码)[：:\s-]+/u', '', $value);
+        $value = preg_replace('/^(?:Serial\s*(?:No\.?|Number)?|S\s*\/\s*N|No\.?|Number|LOT|Lot\s+No\.?|Lot\s+Number|Batch|Retrace\s+Code|Barcode|Bar\s*Code)[：:\s-]+/iu', '', $value);
+        $value = clean_fallback_value($value);
+        if ($value === $before) {
+            break;
+        }
+    }
+
+    if ($value === '' || batch_candidate_is_label($value)) {
+        return '';
+    }
+    if (!preg_match('/^[A-Za-z0-9][A-Za-z0-9._\/-]{0,63}$/u', $value)) {
+        return '';
+    }
+    return $value;
+}
+
+function normalize_fallback_candidate_value($value)
+{
+    $normalized = normalize_batch_candidate_value($value);
+    if ($normalized === '' || !preg_match('/\d/', $normalized)) {
+        return '';
+    }
+    return $normalized;
+}
+
+function sanitize_batch_candidates($values)
+{
+    if (!is_array($values)) {
+        return array();
+    }
+
+    $candidates = array();
+    foreach ($values as $value) {
+        $normalized = normalize_batch_candidate_value((string) $value);
+        if ($normalized !== '' && !in_array($normalized, $candidates, true)) {
+            $candidates[] = $normalized;
+        }
+    }
+    return array_slice($candidates, 0, 6);
+}
+
+function append_reason_text($reason, $addition)
+{
+    $reason = is_string($reason) ? trim($reason) : '';
+    return $reason === '' ? $addition : $reason . '；' . $addition;
+}
+
 function normalize_date_value($value)
 {
     if (!is_string($value)) {
@@ -793,7 +891,7 @@ function find_trigger_values($text)
     foreach ($triggerFallbackPatterns as $pattern) {
         if (preg_match_all($pattern['regex'], $normalized, $matches, PREG_SET_ORDER)) {
             foreach ($matches as $match) {
-                $value = clean_fallback_value(isset($match[1]) ? $match[1] : '');
+                $value = normalize_fallback_candidate_value(isset($match[1]) ? $match[1] : '');
                 if ($value !== '' && !isset($candidatesByValue[$value])) {
                     $candidatesByValue[$value] = array('trigger' => $pattern['trigger'], 'value' => $value);
                 }
@@ -859,12 +957,26 @@ function normalize_recognition($parsed, $elapsedMs, $imageInfo)
     $status = in_array(array_value($fallbackParsed, 'status', ''), $allowedStatuses, true)
         ? array_value($fallbackParsed, 'status')
         : 'error';
-    $batchNumber = is_string(array_value($fallbackParsed, 'batch_number'))
-        ? trim(array_value($fallbackParsed, 'batch_number'))
-        : '';
-    $candidates = is_array(array_value($fallbackParsed, 'candidates'))
-        ? array_slice(array_values(array_filter(array_map('strval', array_value($fallbackParsed, 'candidates')))), 0, 6)
-        : array();
+    $batchNumber = normalize_batch_candidate_value(array_value($fallbackParsed, 'batch_number', ''));
+    $candidates = sanitize_batch_candidates(array_value($fallbackParsed, 'candidates', array()));
+    $reason = is_string(array_value($fallbackParsed, 'reason')) ? array_value($fallbackParsed, 'reason') : '';
+
+    if ($batchNumber !== '' && !in_array($batchNumber, $candidates, true)) {
+        array_unshift($candidates, $batchNumber);
+        $candidates = array_slice(array_values(array_unique($candidates)), 0, 6);
+    }
+
+    if ($status === 'multiple_candidates' && count($candidates) === 1) {
+        $status = 'recognized';
+        $batchNumber = $candidates[0];
+        $reason = append_reason_text($reason, '系统过滤字段名候选后仅保留一个真实编号。');
+    } elseif ($status === 'multiple_candidates' && count($candidates) === 0 && $batchNumber === '') {
+        $status = 'not_found';
+        $reason = append_reason_text($reason, '候选均为字段名或无效值，按未识别处理。');
+    } elseif ($status === 'recognized' && $batchNumber === '' && count($candidates) === 1) {
+        $batchNumber = $candidates[0];
+    }
+
     $productionDate = normalize_date_value(array_value($fallbackParsed, 'production_date', ''));
     $expiryDate = normalize_date_value(array_value($fallbackParsed, 'expiry_date', ''));
 
@@ -876,7 +988,7 @@ function normalize_recognition($parsed, $elapsedMs, $imageInfo)
         'confidence' => is_string(array_value($fallbackParsed, 'confidence')) ? array_value($fallbackParsed, 'confidence') : 'unknown',
         'trigger' => is_string(array_value($fallbackParsed, 'trigger')) ? array_value($fallbackParsed, 'trigger') : '',
         'candidates' => $candidates,
-        'reason' => is_string(array_value($fallbackParsed, 'reason')) ? array_value($fallbackParsed, 'reason') : '',
+        'reason' => $reason,
         'raw_visible_text' => is_string(array_value($fallbackParsed, 'raw_visible_text')) ? array_value($fallbackParsed, 'raw_visible_text') : '',
         'needs_human_confirmation' => true,
         'elapsed_ms' => $elapsedMs,
@@ -913,6 +1025,8 @@ function build_prompt()
         '以下触发词全部等价，都是 WMS 厂商批号来源，优先级相同：' . implode('、', $triggerWords) . '。',
         '只要图片中出现任一上述触发词，且其后或旁边有唯一对应值，就必须返回 status=recognized。',
         '不得因为字段名是 S/N、Serial No、序列号、产品序列号、序号或出厂编号而返回 not_found；这些字段在本项目中与 LOT、Batch、批号同级。',
+        '字段名本身不能作为候选值；例如“序列号 Serial no: 70552605046”只能返回 70552605046，不能把 Serial、Serial no、No、序列号写入 candidates。',
+        '条形码图形不等于明文编号；本阶段不做条码解码，只识别图片上可见的文字编号。',
         '生产日期触发词包括：生产日期、生产年月、制造日期、MFG、Mfg. Date、MFD、Manufacture Date、UDI 中的 (11)。',
         '失效日期触发词包括：EXP、Exp.、Expiry Date、Expiration Date、Use Before、Best Before、失效日期、有效期至、有效期、沙漏/漏斗图标后的日期、UDI 中的 (17)。',
         '日期格式统一输出 YYYY-MM-DD；如果明确只看到年月，默认补为当月 1 号，例如 2026年05月 输出 2026-05-01。',
