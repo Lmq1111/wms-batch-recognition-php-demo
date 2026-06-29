@@ -41,6 +41,8 @@ LOG_RETENTION_DAYS=180
 | `request_id` | 调用方传入或服务端生成的请求 ID |
 | `status` | `recognized`、`multiple_candidates`、`not_found` 或 `error` |
 | `batch_number` | AI 最终给出的批次号候选，未识别到时为空字符串 |
+| `production_date` | AI 识别到的生产日期，格式 `YYYY-MM-DD`；只到年月时补为当月 1 号，未识别到为空字符串 |
+| `expiry_date` | AI 识别到的失效日期，格式 `YYYY-MM-DD`；只到年月时补为当月 1 号，未识别到为空字符串 |
 | `candidates` | 候选批次号数组 |
 | `confidence` | 模型置信度：`high`、`medium`、`low`、`unknown` |
 | `trigger` | 命中的触发词 |
@@ -74,6 +76,10 @@ LOG_RETENTION_DAYS=180
 |---|---|
 | `ai_batch_number` | AI 返回的批次号 |
 | `confirmed_batch_number` | 人工确认后的批次号，可为空 |
+| `ai_production_date` | AI 返回的生产日期，可为空 |
+| `confirmed_production_date` | 人工确认后的生产日期，可为空 |
+| `ai_expiry_date` | AI 返回的失效日期，可为空 |
+| `confirmed_expiry_date` | 人工确认后的失效日期，可为空 |
 | `is_modified` | 人工确认值是否不同于 AI 返回值 |
 | `operator` | 操作人，可选 |
 | `note` | 备注，可选 |

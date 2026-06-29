@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WMS 批次识别 PHP Demo</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="phone" aria-label="WMS 入库小程序 Demo">
+        <header class="topbar">
+          <button class="icon-button" type="button" aria-label="返回">‹</button>
+          <div>
+            <h1>商品入库</h1>
+            <p id="runtimeStatus">正在检查服务...</p>
+          </div>
+          <button class="icon-button" type="button" aria-label="更多">⋯</button>
+        </header>
+
+        <section class="form-band">
+          <label class="field">
+            <span>商品名称</span>
+            <input value="演示商品 / WMS 入库样本" readonly />
+          </label>
+
+          <label class="field field-with-action">
+            <span>厂商批号</span>
+            <div class="inline-control">
+              <input id="batchInput" placeholder="可为空提交，错误批号不可提交" autocomplete="off" />
+              <button id="recognizeButton" class="primary small" type="button">识别</button>
+            </div>
+          </label>
+
+          <div class="field-grid">
+            <label class="field">
+              <span>生产日期</span>
+              <input id="productionDateInput" placeholder="YYYY-MM-DD，可为空" autocomplete="off" />
+            </label>
+
+            <label class="field">
+              <span>失效日期</span>
+              <input id="expiryDateInput" placeholder="YYYY-MM-DD，可为空" autocomplete="off" />
+            </label>
+          </div>
+
+          <label class="field">
+            <span>入库数量</span>
+            <input value="1" inputmode="numeric" />
+          </label>
+        </section>
+
+        <section class="upload-band">
+          <div class="section-head">
+            <h2>上传照片</h2>
+            <span id="photoCount">0/10</span>
+          </div>
+          <div id="uploadGrid" class="upload-grid">
+            <button id="addPhotoButton" class="upload-tile" type="button">
+              <span class="plus">+</span>
+              <span>拍照/上传</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="sample-band">
+          <div class="section-head">
+            <h2>测试样本</h2>
+            <span id="sampleCount">0 张</span>
+          </div>
+          <select id="sampleSelect">
+            <option value="">选择一张已归档样本</option>
+          </select>
+        </section>
+
+        <footer class="submit-bar">
+          <button id="submitButton" class="primary wide" type="button">提交入库</button>
+        </footer>
+      </section>
+    </main>
+
+    <input id="fileInput" type="file" accept="image/*" capture="environment" hidden />
+
+    <dialog id="confirmDialog" class="dialog">
+      <div class="dialog-body">
+        <div class="image-frame">
+          <img id="previewImage" alt="待识别入库标签照片" />
+        </div>
+
+        <div class="result-panel">
+          <div class="status-row">
+            <span id="recognitionState" class="status-chip">待识别</span>
+            <span id="elapsedText" class="elapsed"></span>
+          </div>
+
+          <label class="field">
+            <span>识别批次号</span>
+            <input id="confirmBatchInput" placeholder="识别不到时请人工填写或留空" autocomplete="off" />
+          </label>
+
+          <div class="field-grid">
+            <label class="field">
+              <span>识别生产日期</span>
+              <input id="confirmProductionDateInput" placeholder="YYYY-MM-DD，可为空" autocomplete="off" />
+            </label>
+
+            <label class="field">
+              <span>识别失效日期</span>
+              <input id="confirmExpiryDateInput" placeholder="YYYY-MM-DD，可为空" autocomplete="off" />
+            </label>
+          </div>
+
+          <p id="reasonText" class="reason"></p>
+          <pre id="rawText" class="raw-text"></pre>
+        </div>
+
+        <div class="dialog-actions">
+          <button id="retakeButton" class="secondary" type="button">重新拍照</button>
+          <button id="confirmButton" class="primary" type="button">确定</button>
+        </div>
+      </div>
+    </dialog>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

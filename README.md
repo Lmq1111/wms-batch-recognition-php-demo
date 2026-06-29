@@ -1,15 +1,16 @@
 # WMS Batch Recognition API PHP
 
-极简 PHP 版批次号识别接口服务。它只做一件事：接收图片，调用阿里云百炼 DashScope 视觉模型识别 WMS “厂商批号”字段可填写的候选值，并返回候选结果、审计字段和耗时字段。
+PHP 版 WMS 入库标签识别验证服务。它接收图片，调用阿里云百炼 DashScope 视觉模型识别 WMS “厂商批号、生产日期、失效日期”三个可人工确认字段，并返回候选结果、审计字段和耗时字段。
 
-本服务不包含前端页面，不接 WMS 生产入库，不自动提交结果。所有识别结果都必须由业务人员人工确认。
+本分支包含浏览器 Demo 页面，便于在 PHP 环境中验证拍照/上传、AI 识别和人工确认流程。本服务不接 WMS 生产入库，不自动提交结果。所有识别结果都必须由业务人员人工确认。
 
 ## 产品边界
 
-- 第一阶段只识别批次号/厂商批号候选。
-- 不识别生产日期、有效期、型号、规格、货号、数量、价格。
+- 当前验证字段：厂商批号、生产日期、失效日期。
+- 不识别型号、规格、货号、数量、价格。
 - 触发词同级：`LOT`、`Lot No`、`Lot Number`、`Batch`、`S/N`、`Serial No`、`Retrace Code`、`批号`、`生产批号`、`批次号`、`批次代码`、`序列号`、`产品序列号`、`序号`、`出厂编号`。
-- 识别不到返回空值，不猜。
+- 日期字段必须有明确字段、图标或日期语义才返回；只到年月时默认补为当月 1 号，例如 `2026年05月` 返回 `2026-05-01`；`092127`、`260307` 等 6 位日期只在格式不歧义时归一化。
+- 识别不到返回空值，不猜，不输出“疑似”“待复核”。
 - 结果必须人工确认。
 - 本服务不写入 WMS，不自动入库。
 - 服务端不压缩、不留存图片文件，只记录收到的图片大小、MIME、宽高、前端压缩参数、识别结果、耗时和人工反馈日志。
@@ -61,7 +62,7 @@ vi .env
 
 ```bash
 DASHSCOPE_API_KEY=你的百炼APIKey
-WMS_API_TOKEN=给WMS或小程序后端的共享Token
+WMS_API_TOKEN=
 AI_MODEL=qwen3.6-flash
 AI_API_ENDPOINT=https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
 AI_MAX_TOKENS=900
@@ -70,9 +71,12 @@ CORS_ALLOW_ORIGIN=*
 MAX_JSON_BYTES=18874368
 RECOGNITION_LOG_PATH=logs/recognition-events.jsonl
 LOG_RETENTION_DAYS=180
+SAMPLE_DIR=../../raw/项目/WMS批次读取与人工校验_2026-06-11/批次样本_2026-06-11
 ```
 
 不要把真实 API Key 提交到 Git。
+
+本地浏览器 Demo 会直接调用 `/api/wms/batch-recognize`。如果只是本机演示，可先把 `WMS_API_TOKEN` 留空；生产或外部联调必须设置 `WMS_API_TOKEN`，由后端或小程序服务端带 `Authorization` 或 `X-API-Key` 调用。
 
 ### 4. 设置日志目录权限
 
@@ -136,6 +140,14 @@ sudo systemctl reload nginx
 cd /opt/wms-batch-recognition-api-php
 php -S 0.0.0.0:5178 -t public
 ```
+
+打开：
+
+```text
+http://localhost:5178/
+```
+
+Demo 会读取 `/api/samples` 中的本地样本；如样本目录不在默认位置，可通过 `SAMPLE_DIR` 配置。
 
 生产部署不建议长期使用 PHP 内置服务。
 
@@ -221,6 +233,8 @@ X-API-Key: <WMS_API_TOKEN>
   "request_id": "optional-client-request-id",
   "data": {
     "batch_number": "A-263100-3Z26",
+    "production_date": "2026-05-01",
+    "expiry_date": "",
     "status": "recognized",
     "confidence": "high",
     "trigger": "Serial No",
@@ -265,6 +279,8 @@ X-API-Key: <WMS_API_TOKEN>
   "request_id": "optional-client-request-id",
   "data": {
     "batch_number": "",
+    "production_date": "",
+    "expiry_date": "",
     "status": "not_found",
     "confidence": "unknown",
     "trigger": "",
@@ -296,6 +312,8 @@ X-API-Key: <WMS_API_TOKEN>
   "request_id": "optional-client-request-id",
   "data": {
     "batch_number": "M603004e",
+    "production_date": "2026-03-07",
+    "expiry_date": "2029-03-06",
     "status": "multiple_candidates",
     "confidence": "medium",
     "trigger": "Batch、LOT",
@@ -334,7 +352,7 @@ X-API-Key: <WMS_API_TOKEN>
 |---|---|---|
 | `recognized` | 识别到唯一候选 | 展示候选，必须人工确认后回填 |
 | `multiple_candidates` | 存在多个候选 | 展示候选列表或让人工输入确认 |
-| `not_found` | 未识别到明确批次号 | 允许人工填写或重新拍照，不能自动猜测 |
+| `not_found` | 未识别到明确批次号 | 允许人工填写或重新拍照，不能自动猜测；日期字段如明确可仍返回 |
 | `error` | 识别流程异常 | 提示失败，可重新拍照或人工填写 |
 
 如果 AI 模型调用超过 `AI_TIMEOUT_MS`，接口会中止模型请求，并按 `status=not_found` 返回空批号，不作为接口错误处理。
@@ -354,6 +372,10 @@ Authorization: Bearer <WMS_API_TOKEN>
   "request_id": "optional-client-request-id",
   "ai_batch_number": "A-263100-3Z26",
   "confirmed_batch_number": "A-263100-3Z26",
+  "ai_production_date": "2026-05-01",
+  "confirmed_production_date": "2026-05-01",
+  "ai_expiry_date": "",
+  "confirmed_expiry_date": "",
   "is_modified": false,
   "operator": "optional",
   "note": "optional"
@@ -367,6 +389,10 @@ Authorization: Bearer <WMS_API_TOKEN>
   "request_id": "optional-client-request-id",
   "ai_batch_number": "",
   "confirmed_batch_number": "",
+  "ai_production_date": "",
+  "confirmed_production_date": "",
+  "ai_expiry_date": "",
+  "confirmed_expiry_date": "",
   "is_modified": false,
   "operator": "optional",
   "note": "未识别到，人工确认为空"
@@ -446,6 +472,10 @@ curl -X POST http://your-domain.example.com/api/wms/batch-feedback \
     "request_id": "test-curl",
     "ai_batch_number": "A-263100-3Z26",
     "confirmed_batch_number": "A-263100-3Z26",
+    "ai_production_date": "2026-05-01",
+    "confirmed_production_date": "2026-05-01",
+    "ai_expiry_date": "",
+    "confirmed_expiry_date": "",
     "is_modified": false,
     "operator": "tester"
   }'
@@ -457,7 +487,10 @@ curl -X POST http://your-domain.example.com/api/wms/batch-feedback \
 .
 ├── public/
 │   ├── .htaccess
-│   └── index.php
+│   ├── app.js
+│   ├── index.html
+│   ├── index.php
+│   └── styles.css
 ├── docs/
 │   └── log-fields.md
 ├── .env.example

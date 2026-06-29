@@ -20,6 +20,10 @@ $wmsApiToken = env_value('WMS_API_TOKEN', '');
 $corsAllowOrigin = env_value('CORS_ALLOW_ORIGIN', '*');
 $recognitionLogPath = resolve_path($rootDir, env_value('RECOGNITION_LOG_PATH', 'logs/recognition-events.jsonl'));
 $logRetentionDays = env_non_negative_int('LOG_RETENTION_DAYS', 180);
+$sampleDir = resolve_path(
+    $rootDir,
+    env_value('SAMPLE_DIR', '../../raw/项目/WMS批次读取与人工校验_2026-06-11/批次样本_2026-06-11')
+);
 
 $triggerWords = array(
     'LOT',
@@ -157,6 +161,18 @@ function send_json($statusCode, $data, $withCors = false)
     http_response_code($statusCode);
     header('Content-Type: application/json; charset=utf-8');
     echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+}
+
+function send_file_response($path, $contentType)
+{
+    if (!is_file($path) || !is_readable($path)) {
+        send_json(404, array('ok' => false, 'error' => 'Not found'), false);
+        return;
+    }
+    http_response_code(200);
+    header('Content-Type: ' . $contentType);
+    header('Content-Length: ' . filesize($path));
+    readfile($path);
 }
 
 function read_json_body()
@@ -660,6 +676,8 @@ function parse_json_fields_loosely($text)
 {
     $parsed = array(
         'batch_number' => loose_string_field($text, 'batch_number'),
+        'production_date' => loose_string_field($text, 'production_date'),
+        'expiry_date' => loose_string_field($text, 'expiry_date'),
         'status' => loose_string_field($text, 'status'),
         'confidence' => loose_string_field($text, 'confidence'),
         'trigger' => loose_string_field($text, 'trigger'),
@@ -691,6 +709,75 @@ function loose_array_field($text, $name)
 function clean_fallback_value($value)
 {
     return preg_replace('/[，,。；;）)\]}】]+$/u', '', trim($value));
+}
+
+function normalize_date_value($value)
+{
+    if (!is_string($value)) {
+        return '';
+    }
+    $value = trim($value);
+    if ($value === '') {
+        return '';
+    }
+
+    $patterns = array(
+        '/^(\d{4})[-\.\/](\d{1,2})[-\.\/](\d{1,2})$/u',
+        '/^(\d{4})年(\d{1,2})月(\d{1,2})日?$/u',
+        '/^(\d{2})[-\.\/](\d{1,2})[-\.\/](\d{1,2})$/u',
+    );
+    foreach ($patterns as $index => $pattern) {
+        if (preg_match($pattern, $value, $matches)) {
+            $year = intval($matches[1]);
+            if ($index === 2) {
+                $year += $year >= 70 ? 1900 : 2000;
+            }
+            $month = intval($matches[2]);
+            $day = intval($matches[3]);
+            return checkdate($month, $day, $year) ? sprintf('%04d-%02d-%02d', $year, $month, $day) : '';
+        }
+    }
+
+    if (preg_match('/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/u', $value, $matches)) {
+        $first = intval($matches[1]);
+        $middle = intval($matches[2]);
+        $last = intval($matches[3]);
+        if ($first >= 1 && $first <= 12 && $middle > 12 && $middle <= 31) {
+            $year = strlen($matches[3]) === 2 ? ($last >= 70 ? 1900 + $last : 2000 + $last) : $last;
+            return checkdate($first, $middle, $year) ? sprintf('%04d-%02d-%02d', $year, $first, $middle) : '';
+        }
+    }
+
+    if (preg_match('/^\d{6}$/', $value)) {
+        $first = intval(substr($value, 0, 2));
+        $middle = intval(substr($value, 2, 2));
+        $last = intval(substr($value, 4, 2));
+        $validCandidates = array();
+
+        $mmddyyYear = $last >= 70 ? 1900 + $last : 2000 + $last;
+        if (checkdate($first, $middle, $mmddyyYear)) {
+            $validCandidates[] = sprintf('%04d-%02d-%02d', $mmddyyYear, $first, $middle);
+        }
+
+        $yymmddYear = $first >= 70 ? 1900 + $first : 2000 + $first;
+        if (checkdate($middle, $last, $yymmddYear)) {
+            $validCandidates[] = sprintf('%04d-%02d-%02d', $yymmddYear, $middle, $last);
+        }
+
+        $uniqueCandidates = array_values(array_unique($validCandidates));
+        return count($uniqueCandidates) === 1 ? $uniqueCandidates[0] : '';
+    }
+
+    if (
+        preg_match('/^(\d{4})[-\.\/](\d{1,2})$/u', $value, $matches) ||
+        preg_match('/^(\d{4})年(\d{1,2})月?$/u', $value, $matches)
+    ) {
+        $year = intval($matches[1]);
+        $month = intval($matches[2]);
+        return checkdate($month, 1, $year) ? sprintf('%04d-%02d-01', $year, $month) : '';
+    }
+
+    return '';
 }
 
 function find_trigger_values($text)
@@ -778,9 +865,13 @@ function normalize_recognition($parsed, $elapsedMs, $imageInfo)
     $candidates = is_array(array_value($fallbackParsed, 'candidates'))
         ? array_slice(array_values(array_filter(array_map('strval', array_value($fallbackParsed, 'candidates')))), 0, 6)
         : array();
+    $productionDate = normalize_date_value(array_value($fallbackParsed, 'production_date', ''));
+    $expiryDate = normalize_date_value(array_value($fallbackParsed, 'expiry_date', ''));
 
     return array(
         'batch_number' => $status === 'not_found' ? '' : $batchNumber,
+        'production_date' => $productionDate,
+        'expiry_date' => $expiryDate,
         'status' => $status,
         'confidence' => is_string(array_value($fallbackParsed, 'confidence')) ? array_value($fallbackParsed, 'confidence') : 'unknown',
         'trigger' => is_string(array_value($fallbackParsed, 'trigger')) ? array_value($fallbackParsed, 'trigger') : '',
@@ -802,6 +893,8 @@ function build_timeout_recognition($elapsedMs, $imageInfo)
 {
     return normalize_recognition(array(
         'batch_number' => '',
+        'production_date' => '',
+        'expiry_date' => '',
         'status' => 'not_found',
         'confidence' => 'unknown',
         'trigger' => '',
@@ -815,18 +908,23 @@ function build_prompt()
 {
     global $triggerWords;
     return implode("\n", array(
-        '你是 WMS 入库小程序的厂商批号识别助手。',
-        '目标：只从图片中识别 WMS 厂商批号字段可填写的候选值。第一阶段不要识别生产日期、有效期、型号、规格、货号、数量、价格。',
+        '你是 WMS 入库小程序的入库标签识别助手。',
+        '目标：从图片中识别三个可人工确认字段：厂商批号、生产日期、失效日期。不要识别型号、规格、货号、数量、价格。',
         '以下触发词全部等价，都是 WMS 厂商批号来源，优先级相同：' . implode('、', $triggerWords) . '。',
         '只要图片中出现任一上述触发词，且其后或旁边有唯一对应值，就必须返回 status=recognized。',
         '不得因为字段名是 S/N、Serial No、序列号、产品序列号、序号或出厂编号而返回 not_found；这些字段在本项目中与 LOT、Batch、批号同级。',
-        '业务规则：错误批号风险高，所以识别不到就不猜；可以返回空值，由人工填写。',
+        '生产日期触发词包括：生产日期、生产年月、制造日期、MFG、Mfg. Date、MFD、Manufacture Date、UDI 中的 (11)。',
+        '失效日期触发词包括：EXP、Exp.、Expiry Date、Expiration Date、Use Before、Best Before、失效日期、有效期至、有效期、沙漏/漏斗图标后的日期、UDI 中的 (17)。',
+        '日期格式统一输出 YYYY-MM-DD；如果明确只看到年月，默认补为当月 1 号，例如 2026年05月 输出 2026-05-01。',
+        '可以根据明确生产日期和明确 Shelf Life/有效期年限推算失效日期，但必须在 reason 中说明由生产日期和有效期推算。',
+        '业务规则：错误风险高，所以识别不到就不猜；批号、生产日期、失效日期都可以返回空值，由人工填写。',
         '如果有明确触发词和唯一值，status=recognized。',
         '如果存在多个候选，status=multiple_candidates，并把候选写入 candidates，batch_number 填最可能的一个。',
-        '如果没有明确触发词，或无法判断哪个值是批次号，status=not_found，batch_number 为空。',
+        '如果没有明确批号触发词，或无法判断哪个值是批次号，status=not_found，batch_number 为空；但 production_date 和 expiry_date 仍可填写明确识别到的日期。',
+        '不能从批号、序列号、货号或普通数字中猜日期；不能输出“疑似”“待复核”。不确定就输出空字符串。',
         '无论结果如何都需要人工确认，不能自动提交。',
         '只输出 JSON，不要输出 Markdown。',
-        'JSON 字段必须是：batch_number, status, confidence, trigger, candidates, reason, raw_visible_text。',
+        'JSON 字段必须是：batch_number, production_date, expiry_date, status, confidence, trigger, candidates, reason, raw_visible_text。',
         'status 只能是 recognized、multiple_candidates、not_found、error。',
         'confidence 只能是 high、medium、low、unknown。',
         'raw_visible_text 只写与批次识别相关的短文本，不能换行；如果没有必要，返回空字符串。',
@@ -912,6 +1010,8 @@ function build_recognition_response($result, $requestId, $totalElapsedMs)
         'request_id' => $requestId,
         'data' => array(
             'batch_number' => $result['batch_number'],
+            'production_date' => $result['production_date'],
+            'expiry_date' => $result['expiry_date'],
             'status' => $result['status'],
             'confidence' => $result['confidence'],
             'trigger' => $result['trigger'],
@@ -1005,6 +1105,8 @@ function build_recognition_log_event($requestId, $body, $result, $response)
         'client_meta' => is_array(array_value($body, 'client_meta')) ? array_value($body, 'client_meta') : (is_array(array_value($body, 'clientMeta')) ? array_value($body, 'clientMeta') : array()),
         'status' => $result['status'],
         'batch_number' => $result['batch_number'],
+        'production_date' => $result['production_date'],
+        'expiry_date' => $result['expiry_date'],
         'candidates' => $result['candidates'],
         'confidence' => $result['confidence'],
         'trigger' => $result['trigger'],
@@ -1056,10 +1158,62 @@ function build_feedback_log_event($body)
         'created_at' => gmdate('c'),
         'ai_batch_number' => array_value($body, 'ai_batch_number', ''),
         'confirmed_batch_number' => array_value($body, 'confirmed_batch_number', ''),
+        'ai_production_date' => array_value($body, 'ai_production_date', ''),
+        'confirmed_production_date' => array_value($body, 'confirmed_production_date', ''),
+        'ai_expiry_date' => array_value($body, 'ai_expiry_date', ''),
+        'confirmed_expiry_date' => array_value($body, 'confirmed_expiry_date', ''),
         'is_modified' => $isModified,
         'operator' => array_value($body, 'operator', ''),
         'note' => array_value($body, 'note', ''),
     );
+}
+
+function sample_mime_type($fileName)
+{
+    $extension = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
+    if ($extension === 'png') {
+        return 'image/png';
+    }
+    if ($extension === 'webp') {
+        return 'image/webp';
+    }
+    return 'image/jpeg';
+}
+
+function handle_samples()
+{
+    global $sampleDir;
+    $samples = array();
+    if (is_dir($sampleDir)) {
+        $files = scandir($sampleDir);
+        if (is_array($files)) {
+            $imageFiles = array_values(array_filter($files, function ($file) use ($sampleDir) {
+                return is_file($sampleDir . '/' . $file) && preg_match('/\.(png|jpe?g|webp)$/i', $file);
+            }));
+            sort($imageFiles, SORT_NATURAL);
+            foreach ($imageFiles as $index => $file) {
+                $samples[] = array(
+                    'id' => 'S' . str_pad((string) ($index + 1), 3, '0', STR_PAD_LEFT),
+                    'fileName' => $file,
+                    'url' => '/sample/' . rawurlencode($file),
+                );
+            }
+        }
+    }
+    send_json(200, array('samples' => $samples), true);
+}
+
+function handle_sample_file($path)
+{
+    global $sampleDir;
+    $prefix = '/sample/';
+    $encoded = substr($path, strlen($prefix));
+    $fileName = basename(rawurldecode($encoded));
+    if ($fileName === '' || !preg_match('/\.(png|jpe?g|webp)$/i', $fileName)) {
+        send_json(404, array('ok' => false, 'error' => 'Not found'), false);
+        return;
+    }
+    send_file_response($sampleDir . '/' . $fileName, sample_mime_type($fileName));
 }
 
 function validate_feedback_body($body)
@@ -1146,6 +1300,21 @@ try {
 
     if ($method === 'GET' && $path === '/api/health') {
         handle_health();
+        exit;
+    }
+
+    if ($method === 'GET' && $path === '/api/samples') {
+        handle_samples();
+        exit;
+    }
+
+    if ($method === 'GET' && strpos($path, '/sample/') === 0) {
+        handle_sample_file($path);
+        exit;
+    }
+
+    if ($method === 'GET' && ($path === '/' || $path === '/demo')) {
+        send_file_response(__DIR__ . '/index.html', 'text/html; charset=utf-8');
         exit;
     }
 
