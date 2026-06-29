@@ -90,6 +90,26 @@ function formatSeconds(ms) {
   return `${(ms / 1000).toFixed(1)}秒`;
 }
 
+function subtractOneDay(dateText) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateText || "");
+  if (!match) return dateText || "";
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return dateText;
+  }
+
+  date.setUTCDate(date.getUTCDate() - 1);
+  return date.toISOString().slice(0, 10);
+}
+
 function loadImage(dataUrl) {
   return new Promise((resolve, reject) => {
     const image = new Image();
@@ -240,7 +260,7 @@ function applyRecognitionFields(recognition) {
     els.confirmProductionDateInput.value = recognition.production_date;
   }
   if (!state.confirmInputEdited.expiryDate && recognition.expiry_date) {
-    els.confirmExpiryDateInput.value = recognition.expiry_date;
+    els.confirmExpiryDateInput.value = subtractOneDay(recognition.expiry_date);
   }
 }
 
