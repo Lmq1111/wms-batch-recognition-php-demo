@@ -15,7 +15,7 @@ $apiEndpoint = env_value(
 );
 $maxJsonBytes = env_int('MAX_JSON_BYTES', 18 * 1024 * 1024);
 $maxTokens = env_int('AI_MAX_TOKENS', 900);
-$aiTimeoutMs = env_positive_int('AI_TIMEOUT_MS', 3000);
+$aiTimeoutMs = env_positive_int('AI_TIMEOUT_MS', 10000);
 $wmsApiToken = env_value('WMS_API_TOKEN', '');
 $corsAllowOrigin = env_value('CORS_ALLOW_ORIGIN', '*');
 $recognitionLogPath = resolve_path($rootDir, env_value('RECOGNITION_LOG_PATH', 'logs/recognition-events.jsonl'));
@@ -33,6 +33,8 @@ $triggerWords = array(
     'S/N',
     'Serial No',
     'Retrace Code',
+    '厂商批号',
+    '产品批号',
     '批号',
     '生产批号',
     '批次号',
@@ -43,7 +45,7 @@ $triggerWords = array(
     '出厂编号',
 );
 
-$valueAfterTriggerPattern = '[：:\s]*(?:(?:Serial\s*(?:No\.?|Number)?|S\s*/\s*N|No\.?|Number|Barcode|Bar\s*Code|编号|号码|条形码)[：:\s-]+)?([A-Za-z0-9][A-Za-z0-9._\/-]{0,40})';
+$valueAfterTriggerPattern = '[：:\s]*(?:(?:Serial\s*(?:No\.?|Number)?|S\s*/\s*N|No\.?|Number|Barcode|Bar\s*Code|编号|号码|条形码)[：:\s-]+)?([A-Za-z0-9][A-Za-z0-9._\/-]{0,40}(?:新)?)';
 $triggerFallbackPatterns = array(
     array('trigger' => 'Lot Number', 'regex' => '~\bLot\s+Number\b' . $valueAfterTriggerPattern . '~iu'),
     array('trigger' => 'Lot No', 'regex' => '~\bLot\s+No\b\.?' . $valueAfterTriggerPattern . '~iu'),
@@ -52,6 +54,8 @@ $triggerFallbackPatterns = array(
     array('trigger' => 'S/N', 'regex' => '~\bS\s*/\s*N\b' . $valueAfterTriggerPattern . '~iu'),
     array('trigger' => 'Serial No', 'regex' => '~\bSerial\s+No\b\.?' . $valueAfterTriggerPattern . '~iu'),
     array('trigger' => 'Retrace Code', 'regex' => '~\bRetrace\s+Code\b' . $valueAfterTriggerPattern . '~iu'),
+    array('trigger' => '厂商批号', 'regex' => '~厂商批号' . $valueAfterTriggerPattern . '~iu'),
+    array('trigger' => '产品批号', 'regex' => '~产品批号[：:\s]*([A-Za-z0-9]+(?:\s*[-._\/]\s*[A-Za-z0-9]+)*)~iu'),
     array('trigger' => '生产批号', 'regex' => '~生产批号' . $valueAfterTriggerPattern . '~iu'),
     array('trigger' => '批次代码', 'regex' => '~批次代码' . $valueAfterTriggerPattern . '~iu'),
     array('trigger' => '批次号', 'regex' => '~批次号' . $valueAfterTriggerPattern . '~iu'),
@@ -59,7 +63,7 @@ $triggerFallbackPatterns = array(
     array('trigger' => '序列号', 'regex' => '~序列号' . $valueAfterTriggerPattern . '~iu'),
     array('trigger' => '序号', 'regex' => '~序号' . $valueAfterTriggerPattern . '~iu'),
     array('trigger' => '出厂编号', 'regex' => '~出厂编号' . $valueAfterTriggerPattern . '~iu'),
-    array('trigger' => '批号', 'regex' => '~批号' . $valueAfterTriggerPattern . '~iu'),
+    array('trigger' => '批号', 'regex' => '~(?<!厂商)(?<!产品)(?<!生产)批号' . $valueAfterTriggerPattern . '~iu'),
 );
 
 class HttpError extends Exception
@@ -675,9 +679,12 @@ function escape_control_chars_inside_json_strings($text)
 function parse_json_fields_loosely($text)
 {
     $parsed = array(
+        'source_type' => loose_string_field($text, 'source_type'),
         'batch_number' => loose_string_field($text, 'batch_number'),
         'production_date' => loose_string_field($text, 'production_date'),
+        'production_date_precision' => loose_string_field($text, 'production_date_precision'),
         'expiry_date' => loose_string_field($text, 'expiry_date'),
+        'expiry_date_precision' => loose_string_field($text, 'expiry_date_precision'),
         'status' => loose_string_field($text, 'status'),
         'confidence' => loose_string_field($text, 'confidence'),
         'trigger' => loose_string_field($text, 'trigger'),
@@ -741,6 +748,7 @@ function batch_candidate_is_label($value)
         '序号',
         '出厂编号',
         '批号',
+        '产品批号',
         '生产批号',
         '批次号',
         '批次代码',
@@ -759,11 +767,13 @@ function normalize_batch_candidate_value($value)
     }
 
     $value = clean_fallback_value($value);
+    $value = preg_replace('/\s*([._\/-])\s*/u', '$1', $value);
     for ($i = 0; $i < 3; $i += 1) {
         $before = $value;
-        $value = preg_replace('/^(?:序列号|产品序列号|序号|出厂编号|批号|生产批号|批次号|批次代码|编号|号码|条形码)[：:\s-]+/u', '', $value);
+        $value = preg_replace('/^(?:序列号|产品序列号|序号|出厂编号|产品批号|批号|生产批号|批次号|批次代码|编号|号码|条形码)[：:\s-]+/u', '', $value);
         $value = preg_replace('/^(?:Serial\s*(?:No\.?|Number)?|S\s*\/\s*N|No\.?|Number|LOT|Lot\s+No\.?|Lot\s+Number|Batch|Retrace\s+Code|Barcode|Bar\s*Code)[：:\s-]+/iu', '', $value);
         $value = clean_fallback_value($value);
+        $value = preg_replace('/\s*([._\/-])\s*/u', '$1', $value);
         if ($value === $before) {
             break;
         }
@@ -772,7 +782,7 @@ function normalize_batch_candidate_value($value)
     if ($value === '' || batch_candidate_is_label($value)) {
         return '';
     }
-    if (!preg_match('/^[A-Za-z0-9][A-Za-z0-9._\/-]{0,63}$/u', $value)) {
+    if (!preg_match('/^[A-Za-z0-9][A-Za-z0-9._\/-]{0,63}(?:新)?$/u', $value)) {
         return '';
     }
     return $value;
@@ -809,13 +819,24 @@ function append_reason_text($reason, $addition)
     return $reason === '' ? $addition : $reason . '；' . $addition;
 }
 
-function normalize_date_value($value)
+function normalize_date_value($value, $monthOnlyPolicy = 'first', $precision = 'unknown')
 {
     if (!is_string($value)) {
         return '';
     }
     $value = trim($value);
     if ($value === '') {
+        return '';
+    }
+    $value = strip_explicit_time_suffix($value);
+    $precision = normalize_date_precision($precision);
+    if ($precision === 'month') {
+        $yearMonth = extract_year_month($value, true);
+        return $yearMonth === null
+            ? ''
+            : format_month_boundary_date($yearMonth['year'], $yearMonth['month'], $monthOnlyPolicy);
+    }
+    if (date_value_has_invalid_characters($value)) {
         return '';
     }
 
@@ -844,6 +865,10 @@ function normalize_date_value($value)
             $year = strlen($matches[3]) === 2 ? ($last >= 70 ? 1900 + $last : 2000 + $last) : $last;
             return checkdate($first, $middle, $year) ? sprintf('%04d-%02d-%02d', $year, $first, $middle) : '';
         }
+        if ($first > 12 && $first <= 31 && $middle >= 1 && $middle <= 12) {
+            $year = strlen($matches[3]) === 2 ? ($last >= 70 ? 1900 + $last : 2000 + $last) : $last;
+            return checkdate($middle, $first, $year) ? sprintf('%04d-%02d-%02d', $year, $middle, $first) : '';
+        }
     }
 
     if (preg_match('/^\d{6}$/', $value)) {
@@ -866,16 +891,96 @@ function normalize_date_value($value)
         return count($uniqueCandidates) === 1 ? $uniqueCandidates[0] : '';
     }
 
-    if (
-        preg_match('/^(\d{4})[-\.\/](\d{1,2})$/u', $value, $matches) ||
-        preg_match('/^(\d{4})年(\d{1,2})月?$/u', $value, $matches)
-    ) {
-        $year = intval($matches[1]);
-        $month = intval($matches[2]);
-        return checkdate($month, 1, $year) ? sprintf('%04d-%02d-01', $year, $month) : '';
+    $yearMonth = extract_year_month($value, false);
+    if ($yearMonth !== null) {
+        return format_month_boundary_date($yearMonth['year'], $yearMonth['month'], $monthOnlyPolicy);
     }
 
     return '';
+}
+
+function normalize_date_precision($value)
+{
+    return in_array($value, array('day', 'month', 'unknown'), true) ? $value : 'unknown';
+}
+
+function extract_year_month($value, $allowFullDate)
+{
+    $patterns = array(
+        '/^(\d{4})[-\.\/](\d{1,2})' . ($allowFullDate ? '(?:[-\.\/]\d{1,2})?' : '') . '$/u',
+        '/^(\d{4})年(\d{1,2})月' . ($allowFullDate ? '(?:\d{1,2}日?)?' : '?') . '$/u',
+    );
+    foreach ($patterns as $pattern) {
+        if (preg_match($pattern, $value, $matches)) {
+            return array('year' => intval($matches[1]), 'month' => intval($matches[2]));
+        }
+    }
+    if (preg_match('/^(\d{1,2})[-\.\/](\d{4})$/u', $value, $matches)) {
+        return array('year' => intval($matches[2]), 'month' => intval($matches[1]));
+    }
+    return null;
+}
+
+function format_month_boundary_date($year, $month, $policy)
+{
+    if (!checkdate($month, 1, $year)) {
+        return '';
+    }
+    $day = $policy === 'last' ? days_in_gregorian_month($year, $month) : 1;
+    return sprintf('%04d-%02d-%02d', $year, $month, $day);
+}
+
+function days_in_gregorian_month($year, $month)
+{
+    if ($month === 2) {
+        $isLeapYear = $year % 400 === 0 || ($year % 4 === 0 && $year % 100 !== 0);
+        return $isLeapYear ? 29 : 28;
+    }
+    return in_array($month, array(4, 6, 9, 11), true) ? 30 : 31;
+}
+
+function strip_explicit_time_suffix($value)
+{
+    $trimmed = trim((string) $value);
+    if (preg_match('/^(.+?)\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$/u', $trimmed, $matches)) {
+        $hour = intval($matches[2]);
+        $minute = intval($matches[3]);
+        $second = isset($matches[4]) && $matches[4] !== '' ? intval($matches[4]) : 0;
+        if ($hour <= 23 && $minute <= 59 && $second <= 59) {
+            return trim($matches[1]);
+        }
+        return $trimmed;
+    }
+    if (preg_match('/^(.+?)\s+(\d{3,4})$/u', $trimmed, $matches)) {
+        $time = $matches[2];
+        $hour = intval(substr($time, 0, strlen($time) - 2));
+        $minute = intval(substr($time, -2));
+        if ($hour <= 23 && $minute <= 59) {
+            return trim($matches[1]);
+        }
+    }
+    return $trimmed;
+}
+
+function date_value_has_invalid_characters($value)
+{
+    return is_string($value) && preg_match('/[^\d年月日.\/-]/u', trim($value)) === 1;
+}
+
+function production_date_is_future($value)
+{
+    $timezone = new DateTimeZone('Asia/Shanghai');
+    $date = DateTimeImmutable::createFromFormat('!Y-m-d', $value, $timezone);
+    if (!$date || $date->format('Y-m-d') !== $value) {
+        return false;
+    }
+    return $date > new DateTimeImmutable('today', $timezone);
+}
+
+function date_value_for_reason($value)
+{
+    $cleaned = preg_replace('/[\x00-\x1F\x7F]+/', ' ', trim((string) $value));
+    return substr((string) $cleaned, 0, 40);
 }
 
 function find_trigger_values($text)
@@ -904,6 +1009,10 @@ function find_trigger_values($text)
 
 function apply_trigger_fallback($parsed)
 {
+    if (array_value($parsed, 'source_type', 'label') === 'outbound_order') {
+        return $parsed;
+    }
+
     $status = array_value($parsed, 'status', '');
     $batchNumber = trim((string) array_value($parsed, 'batch_number', ''));
     if ($status !== 'not_found' || $batchNumber !== '') {
@@ -960,10 +1069,26 @@ function normalize_recognition($parsed, $elapsedMs, $imageInfo)
     $batchNumber = normalize_batch_candidate_value(array_value($fallbackParsed, 'batch_number', ''));
     $candidates = sanitize_batch_candidates(array_value($fallbackParsed, 'candidates', array()));
     $reason = is_string(array_value($fallbackParsed, 'reason')) ? array_value($fallbackParsed, 'reason') : '';
+    $sourceType = in_array(array_value($fallbackParsed, 'source_type', 'label'), array('label', 'outbound_order'), true)
+        ? array_value($fallbackParsed, 'source_type', 'label')
+        : 'label';
 
-    if ($batchNumber !== '' && !in_array($batchNumber, $candidates, true)) {
+    if ($sourceType === 'outbound_order' && $batchNumber !== '') {
+        $candidates = array($batchNumber);
+        if ($status !== 'error') {
+            $status = 'recognized';
+        }
+    } elseif ($sourceType === 'outbound_order') {
+        $candidates = array();
+        if ($status !== 'error') {
+            $status = 'not_found';
+        }
+    } elseif ($batchNumber !== '') {
+        $candidates = array_values(array_filter($candidates, function ($candidate) use ($batchNumber) {
+            return $candidate !== $batchNumber;
+        }));
         array_unshift($candidates, $batchNumber);
-        $candidates = array_slice(array_values(array_unique($candidates)), 0, 6);
+        $candidates = array_slice($candidates, 0, 6);
     }
 
     if ($status === 'multiple_candidates' && count($candidates) === 1) {
@@ -977,8 +1102,49 @@ function normalize_recognition($parsed, $elapsedMs, $imageInfo)
         $batchNumber = $candidates[0];
     }
 
-    $productionDate = normalize_date_value(array_value($fallbackParsed, 'production_date', ''));
-    $expiryDate = normalize_date_value(array_value($fallbackParsed, 'expiry_date', ''));
+    $rawProductionDate = is_string(array_value($fallbackParsed, 'production_date'))
+        ? trim(array_value($fallbackParsed, 'production_date'))
+        : '';
+    $rawExpiryDate = is_string(array_value($fallbackParsed, 'expiry_date'))
+        ? trim(array_value($fallbackParsed, 'expiry_date'))
+        : '';
+    $productionDatePrecision = normalize_date_precision(array_value($fallbackParsed, 'production_date_precision', 'unknown'));
+    $expiryDatePrecision = normalize_date_precision(array_value($fallbackParsed, 'expiry_date_precision', 'unknown'));
+    if ($sourceType === 'outbound_order' && $batchNumber === '') {
+        $rawProductionDate = '';
+        $rawExpiryDate = '';
+        $productionDatePrecision = 'unknown';
+        $expiryDatePrecision = 'unknown';
+        $reason = append_reason_text($reason, '出库单未识别到清晰厂商批号，对应日期同时留空。');
+    }
+    $productionDate = normalize_date_value($rawProductionDate, 'first', $productionDatePrecision);
+    $expiryDate = normalize_date_value($rawExpiryDate, 'last', $expiryDatePrecision);
+
+    if ($rawProductionDate !== '' && $productionDate === '') {
+        $detail = date_value_has_invalid_characters($rawProductionDate)
+            ? '包含字母或非法字符'
+            : '不是合法或可唯一解析的日期';
+        $reason = append_reason_text(
+            $reason,
+            '服务端日期校验：生产日期原值“' . date_value_for_reason($rawProductionDate) . '”' . $detail . '，已置空。'
+        );
+    }
+    if ($rawExpiryDate !== '' && $expiryDate === '') {
+        $detail = date_value_has_invalid_characters($rawExpiryDate)
+            ? '包含字母或非法字符'
+            : '不是合法或可唯一解析的日期';
+        $reason = append_reason_text(
+            $reason,
+            '服务端日期校验：失效日期原值“' . date_value_for_reason($rawExpiryDate) . '”' . $detail . '，已置空。'
+        );
+    }
+    if ($productionDate !== '' && production_date_is_future($productionDate)) {
+        $reason = append_reason_text(
+            $reason,
+            '服务端日期校验：生产日期“' . $productionDate . '”晚于 Asia/Shanghai 当天，已置空。'
+        );
+        $productionDate = '';
+    }
 
     return array(
         'batch_number' => $status === 'not_found' ? '' : $batchNumber,
@@ -1022,26 +1188,57 @@ function build_prompt()
     return implode("\n", array(
         '你是 WMS 入库小程序的入库标签识别助手。',
         '目标：从图片中识别三个可人工确认字段：厂商批号、生产日期、失效日期。不要识别型号、规格、货号、数量、价格。',
+        '图片可能旋转 90 度或 180 度，先按文字可读方向观察标签，再识别字段和值。',
+        '“产品批号”与 LOT、Batch、厂商批号、批号完全同级。产品批号值中的连接符两侧空格可以去除，例如“26197 - 0324”输出“26197-0324”，但不得删除、补充或改写任何字符。',
+        'M9/900、STD 31004-01 等产品名称、系统名称、型号或规格不是批号，除非它们旁边另有明确批号触发词。',
+        '普通产品标签按字段标签逐行配对：批号只能取批号触发词同一字段内的值；遇到换行后的数量、仓库、库位、效期、品名、规格、货号等下一个字段标签时，当前批号立即结束，绝不能把这些字段的数字拼入批号。',
+        '数量、仓库、库位等字段需要用于判断批号边界，但它们的值不得写入 batch_number、candidates 或日期字段。普通产品标签不得跨不同字段行拼接批号。',
+        '先判断图片类型：普通产品标签返回 source_type=label；只有明确看到表格表头“厂商批号”时才返回 source_type=outbound_order。source_type 仅用于内部处理。',
+        '出库单表格模式：在“厂商批号”列中任选一条最清晰的非空数据行，不要求固定第一行；只返回这一行的批号。',
+        '出库单表格模式：从所选批号的同一行读取“到期日期”作为 expiry_date；同一行没有明确生产日期列时 production_date 为空。严禁把表头上方的出库日期、签收日期或其他日期当成生产日期。',
+        '出库单表格模式：不识别、不返回货号、PO号、订单号、出库单号、销售单号、快递单号、二维码内容、品牌或物料名称。多行是多个真实数据行，不是多个候选；batch_number 与 candidates 第一项相同，candidates 只保留选中的批号，status=recognized。',
+        '出库单表格模式：只有确认批号字符位于同一个有边框表格单元格内时，才可按视觉顺序连接换行字符；例如“86321A08-262”下一行“1”输出“86321A08-2621”。该规则不得用于普通产品标签，禁止跨字段或跨单元格拼接。',
+        '出库单表格模式：厂商批号末尾的“新”可以是批号的真实组成部分，必须忠实保留，不得当作备注删除；例如同一单元格显示“8246704-”下一行“2622新”，应输出“8246704-2622新”。',
+        '输出出库单批号前必须逐字符独立核对两遍，重点检查连续重复数字、字母数字组合和连字符，不能漏字符、补字符或改字符；两次读取不一致就将 batch_number 和对应日期留空，不得猜测。',
         '以下触发词全部等价，都是 WMS 厂商批号来源，优先级相同：' . implode('、', $triggerWords) . '。',
         '只要图片中出现任一上述触发词，且其后或旁边有唯一对应值，就必须返回 status=recognized。',
         '不得因为字段名是 S/N、Serial No、序列号、产品序列号、序号或出厂编号而返回 not_found；这些字段在本项目中与 LOT、Batch、批号同级。',
         '字段名本身不能作为候选值；例如“序列号 Serial no: 70552605046”只能返回 70552605046，不能把 Serial、Serial no、No、序列号写入 candidates。',
         '条形码图形不等于明文编号；本阶段不做条码解码，只识别图片上可见的文字编号。',
-        '生产日期触发词包括：生产日期、生产年月、制造日期、MFG、Mfg. Date、MFD、Manufacture Date、UDI 中的 (11)。',
-        '失效日期触发词包括：EXP、Exp.、Expiry Date、Expiration Date、Use Before、Best Before、失效日期、有效期至、有效期、沙漏/漏斗图标后的日期、UDI 中的 (17)。',
-        '日期格式统一输出 YYYY-MM-DD；如果明确只看到年月，默认补为当月 1 号，例如 2026年05月 输出 2026-05-01。',
-        '可以根据明确生产日期和明确 Shelf Life/有效期年限推算失效日期，但必须在 reason 中说明由生产日期和有效期推算。',
+        '生产日期触发词包括：生产日期、生产年月、制造日期、MFG、Mfg. Date、MFD、Manufacture Date、工厂/制造图标后的日期、UDI 中的 (11)。',
+        'production_date 非空时必须有图片上清晰可见的生产日期触发词和值；没有这些明确依据时必须为空，不得仅凭日期位置、年份或未来日期反推。',
+        '普通产品标签中，Date/DATE 位于 Batch/LOT、Shelf Life/有效期等生产信息区域，且没有打印日期、包装日期、出库日期、失效日期等其他明确语义时，可作为生产日期标识。',
+        '普通产品标签同时出现 Date/DATE、Batch/LOT 和 Shelf Life/有效期时，Date/DATE 必须作为生产日期，Shelf Life/有效期表示从该日期起算的有效时长；不得把 Date/DATE 判断为失效日期，也不得因为没有 MFG/MFD 而将生产日期留空。',
+        '读取 Date/DATE 后清晰可见的日期，不限定原始日期格式；原文有具体日时输出 YYYY-MM-DD，只有年月时输出 YYYY-MM。日期后有明确时间时只保留日期部分。日期顺序无法唯一判断时留空，不得猜测。',
+        '语义示例（不限定日期格式）：Date: 7/20/2026 1412、Batch#: 2630、Shelf Life: 3 years，应输出 production_date=2026-07-20、expiry_date=2029-07-20。',
+        '失效日期触发词包括：EXP、Exp.、Expiry Date、Expiration Date、Use Before、Best Before、效期、失效日期、到期日期、有效期至、有效期、沙漏/漏斗图标后的日期、UDI 中的 (17)。',
+        '效期、EXP、Expiry、失效日期等触发词后的日期只能填写 expiry_date，绝不能复制或反向推算为 production_date；没有明确生产日期依据时 production_date 为空且 production_date_precision=unknown。',
+        '特别逐字区分两字“效期”和四字“生产日期”：图片只显示“效期”时必须填写 expiry_date，绝不能把“效期”扩写、改写或解释为“生产日期”。文字横置时先旋转到可读方向，再独立复核日期标签两遍。',
+        '工厂/制造图标后的日期是生产日期，沙漏/漏斗图标后的日期是失效日期，两者不得互换。',
+        '原文有具体日时，日期格式统一输出 YYYY-MM-DD，并将对应 date_precision 设为 day。',
+        '原文明确只有年月时，不得猜测或补写图片上不存在的日：日期字段输出 YYYY-MM，并将对应 date_precision 设为 month；生产日期由服务端补当月 1 日，失效日期由服务端补当月最后一天。',
+        '年月示例：生产日期 02/2027 输出 production_date=2027-02、production_date_precision=month，服务端返回 2027-02-01；失效日期 02/2027 输出 expiry_date=2027-02、expiry_date_precision=month，服务端返回 2027-02-28；闰年 02/2028 的失效日期由服务端返回 2028-02-29。',
+        '特别检查 6/8/B、0/O、1/I、5/S 等易混淆字符。日期字段只能来自清晰可见的数字，不得把字母猜成或替换成相似数字；任意一位无法明确区分时，对应日期返回空字符串。',
+        '批号允许真实字母，但必须忠实保留图片上的可见字符，不得擅自把字母与相似数字互换。存在字符歧义时 confidence 不得为 high。',
+        '可以根据明确生产日期和明确 Shelf Life/有效期年限推算失效日期，按日历年或月直接相加且不减一天，并必须在 reason 中说明由生产日期和有效期推算。',
         '业务规则：错误风险高，所以识别不到就不猜；批号、生产日期、失效日期都可以返回空值，由人工填写。',
         '如果有明确触发词和唯一值，status=recognized。',
-        '如果存在多个候选，status=multiple_candidates，并把候选写入 candidates，batch_number 填最可能的一个。',
+        '排除 Cat.No.、Catalog No.、REF、货号、型号、规格、数量、仓库、库位、价格以及条形码图形本身等非批号来源，也不得把这些字段对应的值拼入批号。',
+        '如果存在多个合理候选且证据有明确强弱，status=multiple_candidates；优先选择与触发词同一行、距离最近、紧邻其后且标签关系最明确的编号填入 batch_number，并把它放在 candidates 第一项，其余合理候选继续保留。',
+        'LOT、Batch、Serial No、序列号等批号触发词保持同级，不得仅按触发词名称决定优先级。如果候选证据真正并列、无法可靠排序，batch_number 留空，不得强猜。',
         '如果没有明确批号触发词，或无法判断哪个值是批次号，status=not_found，batch_number 为空；但 production_date 和 expiry_date 仍可填写明确识别到的日期。',
         '不能从批号、序列号、货号或普通数字中猜日期；不能输出“疑似”“待复核”。不确定就输出空字符串。',
+        '普通标签示例：货号:X1；批号:AB123；数量:1；仓库:03；效期:2027-03-31，应输出 batch_number=AB123、production_date 为空、expiry_date=2027-03-31，绝不能把数量1和仓库03拼入批号。',
+        '输出前做一致性检查：普通产品标签清晰显示 Date/DATE、Batch/LOT 和 Shelf Life/有效期且日期格式明确时，production_date 不得为空；有效时长可明确计算时 expiry_date 也不得为空。',
         '无论结果如何都需要人工确认，不能自动提交。',
         '只输出 JSON，不要输出 Markdown。',
-        'JSON 字段必须是：batch_number, production_date, expiry_date, status, confidence, trigger, candidates, reason, raw_visible_text。',
+        'JSON 字段必须是：source_type, batch_number, production_date, production_date_precision, expiry_date, expiry_date_precision, status, confidence, trigger, candidates, reason, raw_visible_text。',
+        'production_date_precision 和 expiry_date_precision 只能是 day、month、unknown；日期为空时对应精度为 unknown。',
+        'source_type 只能是 label 或 outbound_order。',
         'status 只能是 recognized、multiple_candidates、not_found、error。',
         'confidence 只能是 high、medium、low、unknown。',
-        'raw_visible_text 只写与批次识别相关的短文本，不能换行；如果没有必要，返回空字符串。',
+        'raw_visible_text 只写与批次识别相关的短文本，不能换行；多个字段用中文分号分隔并保留字段标签，例如“批号:AB123；数量:1；仓库:03；效期:2027-03-31”。',
+        'reason 只写字段依据和必要的日期换算结论，不输出冗长推理、自我纠错过程或互相矛盾的判断。',
         '所有 JSON 字符串内禁止出现未转义换行符、制表符或其他控制字符。',
     ));
 }

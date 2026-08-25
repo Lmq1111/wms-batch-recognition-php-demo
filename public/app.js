@@ -33,6 +33,7 @@ const els = {
   submitButton: document.querySelector("#submitButton"),
   dialog: document.querySelector("#confirmDialog"),
   previewImage: document.querySelector("#previewImage"),
+  rotateImageButton: document.querySelector("#rotateImageButton"),
   recognitionState: document.querySelector("#recognitionState"),
   elapsedText: document.querySelector("#elapsedText"),
   confirmBatchInput: document.querySelector("#confirmBatchInput"),
@@ -88,26 +89,6 @@ function formatSize(bytes) {
 
 function formatSeconds(ms) {
   return `${(ms / 1000).toFixed(1)}秒`;
-}
-
-function subtractOneDay(dateText) {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateText || "");
-  if (!match) return dateText || "";
-
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const date = new Date(Date.UTC(year, month - 1, day));
-  if (
-    date.getUTCFullYear() !== year ||
-    date.getUTCMonth() !== month - 1 ||
-    date.getUTCDate() !== day
-  ) {
-    return dateText;
-  }
-
-  date.setUTCDate(date.getUTCDate() - 1);
-  return date.toISOString().slice(0, 10);
 }
 
 function loadImage(dataUrl) {
@@ -185,6 +166,23 @@ async function prepareImageForAi(imageDataUrl) {
   };
 }
 
+async function rotateImageClockwise(imageDataUrl) {
+  const image = await loadImage(imageDataUrl);
+  const width = image.naturalWidth || image.width;
+  const height = image.naturalHeight || image.height;
+  const canvas = document.createElement("canvas");
+  canvas.width = height;
+  canvas.height = width;
+  const context = canvas.getContext("2d", { alpha: false });
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.translate(canvas.width / 2, canvas.height / 2);
+  context.rotate(Math.PI / 2);
+  context.drawImage(image, -width / 2, -height / 2, width, height);
+  const blob = await canvasToBlob(canvas, "image/jpeg", 0.92);
+  return fileToDataUrl(blob);
+}
+
 function formatImageTiming(aiElapsedMs, meta) {
   const parts = [`AI ${formatSeconds(aiElapsedMs)}`];
   if (meta) {
@@ -214,6 +212,8 @@ function startRecognitionTask(imageDataUrl) {
   state.recognitionTask = {
     id: state.recognitionRunId,
     imageDataUrl,
+    displayImageDataUrl: imageDataUrl,
+    originalImageBytes: estimateDataUrlBytes(imageDataUrl),
     recognitionImageDataUrl: "",
     imageMeta: null,
     recognition: null,
@@ -260,7 +260,7 @@ function applyRecognitionFields(recognition) {
     els.confirmProductionDateInput.value = recognition.production_date;
   }
   if (!state.confirmInputEdited.expiryDate && recognition.expiry_date) {
-    els.confirmExpiryDateInput.value = subtractOneDay(recognition.expiry_date);
+    els.confirmExpiryDateInput.value = recognition.expiry_date;
   }
 }
 
@@ -272,7 +272,8 @@ function renderConfirmDialog() {
   state.currentRecognitionImageDataUrl = task.recognitionImageDataUrl;
   state.currentImageMeta = task.imageMeta;
   state.lastRecognition = task.recognition;
-  els.previewImage.src = task.imageDataUrl;
+  els.previewImage.src = task.displayImageDataUrl;
+  els.rotateImageButton.disabled = task.status === "preparing" || task.status === "recognizing";
   els.elapsedText.textContent = task.recognition?.elapsed_ms
     ? formatImageTiming(task.recognition.elapsed_ms, task.imageMeta)
     : task.imageMeta
@@ -322,8 +323,9 @@ async function recognizeCurrentImage(runId) {
 
     task.status = "preparing";
     renderConfirmDialog();
-    const imageMeta = await prepareImageForAi(task.imageDataUrl);
+    const imageMeta = await prepareImageForAi(task.displayImageDataUrl);
     if (runId !== state.recognitionRunId) return;
+    imageMeta.originalBytes = task.originalImageBytes;
 
     task.recognitionImageDataUrl = imageMeta.dataUrl;
     task.imageMeta = imageMeta;
@@ -442,6 +444,34 @@ els.dialog.addEventListener("cancel", (event) => {
   if (state.recognitionTask && !state.recognitionTask.confirmed) {
     event.preventDefault();
     showToast("请先确认或重新拍照。");
+  }
+});
+
+els.rotateImageButton.addEventListener("click", async () => {
+  const task = state.recognitionTask;
+  if (!task || task.confirmed || task.status === "preparing" || task.status === "recognizing") return;
+
+  state.recognitionRunId += 1;
+  task.id = state.recognitionRunId;
+  task.status = "preparing";
+  task.recognition = null;
+  task.errorMessage = "";
+  task.recognitionImageDataUrl = "";
+  task.imageMeta = null;
+  if (!state.confirmInputEdited.batch) els.confirmBatchInput.value = "";
+  if (!state.confirmInputEdited.productionDate) els.confirmProductionDateInput.value = "";
+  if (!state.confirmInputEdited.expiryDate) els.confirmExpiryDateInput.value = "";
+  renderConfirmDialog();
+
+  try {
+    task.displayImageDataUrl = await rotateImageClockwise(task.displayImageDataUrl);
+    if (!state.recognitionTask || task.id !== state.recognitionRunId) return;
+    renderConfirmDialog();
+    recognizeCurrentImage(task.id);
+  } catch (error) {
+    task.status = "error";
+    task.errorMessage = error.message || "图片旋转失败，请重新拍照。";
+    renderConfirmDialog();
   }
 });
 

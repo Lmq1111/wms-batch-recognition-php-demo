@@ -41,9 +41,9 @@ LOG_RETENTION_DAYS=180
 | `request_id` | 调用方传入或服务端生成的请求 ID |
 | `status` | `recognized`、`multiple_candidates`、`not_found` 或 `error` |
 | `batch_number` | AI 最终给出的批次号候选，未识别到时为空字符串 |
-| `production_date` | AI 识别到的生产日期，格式 `YYYY-MM-DD`；只到年月时补为当月 1 号，未识别到为空字符串 |
-| `expiry_date` | AI 识别到的失效日期，格式 `YYYY-MM-DD`；只到年月时补为当月 1 号，未识别到为空字符串 |
-| `candidates` | 候选批次号数组 |
+| `production_date` | AI 识别到并通过服务端校验的生产日期，格式 `YYYY-MM-DD`；只到年月时补为当月 1 号，包含非法字符、日期非法或晚于 Asia/Shanghai 当天时为空字符串 |
+| `expiry_date` | AI 识别到的失效日期，格式 `YYYY-MM-DD`；只到年月时按公历补为当月最后一天，未识别到为空字符串 |
+| `candidates` | 候选批次号数组；`batch_number` 非空时固定排在第一项，出库单表格模式只保留选中的单行批号 |
 | `confidence` | 模型置信度：`high`、`medium`、`low`、`unknown` |
 | `trigger` | 命中的触发词 |
 | `ai_raw_visible_text` | 模型看到的与批次识别相关的短文本 |
